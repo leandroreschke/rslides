@@ -9,21 +9,36 @@ pub struct Presentation {
 #[derive(Debug, Clone)]
 pub struct Slide {
     pub blocks: Vec<Block>,
+    pub title: Option<String>,
     pub image: Option<ImageAsset>,
     pub warnings: Vec<String>,
     pub reveal_fragments: bool,
     pub line_spacing: Option<u8>,
+    pub column_ratios: Option<Vec<u16>>,
+    pub image_mode: Option<ImageMode>,
+    pub cover: Option<CoverData>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Block {
     BigText(String),
+    SectionHeading { level: u8, text: String },
     Paragraph(String),
+    Spacer(usize),
+    ColumnBreak(usize),
+    ColumnAlign(ColumnAlign),
     Quote(String),
     List(ListData),
     Callout(CalloutData),
     Table(TableData),
     Code(CodeData),
+}
+
+#[derive(Debug, Clone)]
+pub struct CoverData {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub author: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +93,20 @@ pub enum VerticalAlign {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HorizontalAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageMode {
+    Auto,
+    Ascii,
+    Native,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnAlign {
     Left,
     Center,
     Right,

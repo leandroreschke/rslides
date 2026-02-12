@@ -1,61 +1,18 @@
-# rslides Feature Demo
+--- {image-mode: native}
 
-Use `k/K` `l/L` or arrows to navigate. Use `q` or `Esc` to quit.
+title: rslides Feature Demo
+sub_title: Cover metadata slide (title, sub_title, author)
+author: Me, I and Myself
 
-This deck is a usage reference for all currently implemented features.
+--- {columns: [1,3], image-mode: native, title: "Markdown Contract"}
 
----
-
-# CLI Usage
-
-Run:
-
-```bash
-cargo run -- demo.md
-```
-
-Common flags:
-
-| Flag | Example | Notes |
-| --- | --- | --- |
-| `--fps` | `--fps 8` | GIF playback cap |
-| `--no-ansi` | `--no-ansi` | Plain output mode |
-| `--theme` | `--theme theme.example` | Custom colors |
-| `--line-spacing` | `--line-spacing 2` | Global block spacing |
-| `--columns` | `--columns 3,7` | Ratios for image slides |
-| `--image-mode` | `--image-mode native` | Static image render mode |
-| `--gif-mode` | `--gif-mode ascii` | GIF render mode |
-
-`--columns` is ratio-based (not literal percent):
-- `2,8` means 20% / 80%
-- `3,4,3` means 30% / 40% / 30%
-
-Note: non-image slides render full-width text by design.
-
-Render modes:
-- `auto`: prefer native on capable terminals
-- `ascii`: force ASCII blocks
-- `native`: force terminal-native image path
-
----
-
-# Markdown Contract
-
-Slides split on a line that is exactly:
+Slide delimiter supports per-slide config:
 
 ```md
----
+--- {columns: [1,3], image-mode: native, title: "My Slide Title"}
 ```
 
-Supported blocks:
-- H1 (`#`) => Big ASCII title
-- Paragraph
-- Quote (`>`)
-- Lists (`-` and `1.`)
-- Callouts (`[!NOTE]`, `[!TIP]`, `[!WARN]`)
-- Table (pipe table)
-- Code block (fenced + language)
-- One image per slide (`![alt](path)`), including `.svg`
+This config applies to the slide below the delimiter.
 
 ---
 
@@ -63,8 +20,8 @@ Supported blocks:
 
 > This is a quote block with quote styling.
 
-1. Ordered list item one
-2. Ordered list item two
+1. Ordered item one
+2. Ordered item two
 
 - Bullet item one
 - Bullet item two
@@ -73,29 +30,15 @@ Supported blocks:
 [!TIP] Tip callout style.
 [!WARN] Warning callout style.
 
----
+--- {columns: [1,2], image-mode: native}
 
-# Fragments Reveal
+# Inline Line Spacing
 
-<!-- reveal: on -->
+Text before spacing marker.
 
-This first paragraph appears first.
+<!-- line-spacing: 10 -->
 
-Second paragraph appears on next next/forward action.
-
-Third paragraph appears after that.
-
----
-
-# Line Spacing Per Slide
-
-<!-- line_spacing: 2 -->
-
-This slide overrides spacing.
-
-Markdown normally collapses multiple blank lines.
-
-Use `<!-- line_spacing: N -->` (N up to 6) when you want extra breathing room.
+Text after spacing marker.
 
 ---
 
@@ -113,52 +56,42 @@ fn main() {
 }
 ```
 
----
+--- {columns: [2,3], image-mode: native}
 
 # Two Column Image
 
-Text renders left and image renders right when a slide has one image.
-
-Image metadata syntax:
-
-```md
-![ [valign: middle, halign: center, alt: "Caption text"] ](assets/demo.png)
-```
-
 ![ [valign: middle, halign: center, alt: "Centered image with caption"] ](assets/demo.png)
 
----
+--- {columns: [2,3], image-mode: native}
 
 # GIF
 
-GIF can run in ASCII or native mode depending on `--gif-mode`.
-
 ![ [valign: middle, halign: center, alt: "Animated demo gif"] ](assets/demo.gif)
 
----
+--- {columns: [2,3], image-mode: native}
 
-# SVG Image
-
-SVG now renders in ASCII mode.
+# SVG Real Image
 
 ![ [valign: middle, halign: center, alt: "SVG demo asset"] ](assets/demo.svg)
 
+--- {columns: [1,1], title: "Column Directives"}
 
----
+<!-- column: 0 -->
+<!-- align: left -->
+## Left Panel
+This text stays in the first column.
+### Nested topic
+Following text is indented by heading level.
 
-# Hero Image (Centered)
-
-![ [valign: middle, halign: center, alt: "Centered hero alignment"] ](assets/demo.png)
-
----
-
-# Image Only Fullscreen
-
-![ [valign: middle, halign: center, alt: "Fullscreen style image-only slide"] ](assets/demo.png)
+<!-- column: 1 -->
+<!-- align: center -->
+## Right Panel
+This whole block is centered inside column two.
+### Another level
+Indented and centered together.
 
 ---
 
 # Done
 
-You now have examples for:
-BigText, paragraph, quote, list, callout, fragments, line spacing, tables, code highlight, static image, GIF, image metadata, and fullscreen image slides.
+Use `k/l` or arrows to navigate. `q` or `Esc` quits.

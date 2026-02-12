@@ -76,17 +76,25 @@ fn app_navigation_state_transitions() {
         slides: vec![
             Slide {
                 blocks: vec![Block::Paragraph("a".to_string())],
+                title: None,
                 image: None,
                 warnings: vec![],
                 reveal_fragments: false,
                 line_spacing: None,
+                column_ratios: None,
+                image_mode: None,
+                cover: None,
             },
             Slide {
                 blocks: vec![Block::Paragraph("b".to_string())],
+                title: None,
                 image: None,
                 warnings: vec![],
                 reveal_fragments: false,
                 line_spacing: None,
+                column_ratios: None,
+                image_mode: None,
+                cover: None,
             },
         ],
         source_path: PathBuf::from("deck.md"),
@@ -136,10 +144,14 @@ fn non_image_slide_does_not_apply_multi_column_split() {
             lang: Some("rust".to_string()),
             source: "fn fade_steps(total_ms: u64) -> Duration {".to_string(),
         })],
+        title: None,
         image: None,
         warnings: vec![],
         reveal_fragments: false,
         line_spacing: None,
+        column_ratios: None,
+        image_mode: None,
+        cover: None,
     };
 
     let highlighter = CodeHighlighter::new();
@@ -173,10 +185,14 @@ fn ansi_code_line_keeps_full_visible_text() {
             source: "fn fade_steps(total_ms: u64) -> Duration::from_millis(total_ms / 12)"
                 .to_string(),
         })],
+        title: None,
         image: None,
         warnings: vec![],
         reveal_fragments: false,
         line_spacing: None,
+        column_ratios: None,
+        image_mode: None,
+        cover: None,
     };
 
     let highlighter = CodeHighlighter::new();
@@ -201,6 +217,39 @@ fn ansi_code_line_keeps_full_visible_text() {
     let stripped = strip_ansi(&frame.lines.join("\n"));
     assert!(stripped.contains("fade_steps(total_ms: u64)"));
     assert!(stripped.contains("from_millis(total_ms / 12)"));
+}
+
+#[test]
+fn bigtext_only_slide_is_vertically_centered() {
+    let markdown = "# Center me\n";
+    let mut presentation = parse_presentation_from_str(markdown, Path::new("deck.md"))
+        .expect("presentation should parse");
+    let highlighter = CodeHighlighter::new();
+
+    let frame = render_slide(RenderParams {
+        slide: &mut presentation.slides[0],
+        slide_number: 0,
+        total_slides: 1,
+        term_width: 80,
+        term_height: 24,
+        ansi: false,
+        fps: 8,
+        slide_elapsed: Duration::ZERO,
+        base_dir: Path::new("."),
+        highlighter: &highlighter,
+        prefer_real_images: false,
+        visible_blocks: None,
+        theme: &Theme::default(),
+        line_spacing: 1,
+        column_ratios: &[6, 4],
+    });
+
+    let body = &frame.lines[..frame.lines.len().saturating_sub(1)];
+    let first_non_empty = body
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .expect("bigtext should render");
+    assert!(first_non_empty > 0, "bigtext should not render at top row");
 }
 
 fn strip_ansi(input: &str) -> String {

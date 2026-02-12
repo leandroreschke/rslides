@@ -1,7 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use rslides::app::{AppConfig, RenderMode, run_presentation};
+use rslides::app::{AppConfig, run_presentation};
+use rslides::model::ImageMode;
 use rslides::parser::parse_presentation;
 use rslides::render::Theme;
 
@@ -12,9 +13,8 @@ struct Cli {
     fps: u16,
     theme: Theme,
     line_spacing: u8,
-    column_ratios: Vec<u16>,
-    image_mode: RenderMode,
-    gif_mode: RenderMode,
+    image_mode: ImageMode,
+    gif_mode: ImageMode,
 }
 
 fn main() {
@@ -40,7 +40,6 @@ fn run() -> Result<(), AppError> {
             fps: cli.fps,
             theme: cli.theme,
             line_spacing: cli.line_spacing,
-            column_ratios: cli.column_ratios,
             image_mode: cli.image_mode,
             gif_mode: cli.gif_mode,
         },
@@ -56,9 +55,8 @@ where
     let mut fps = 8u16;
     let mut theme = Theme::default();
     let mut line_spacing = 1u8;
-    let mut column_ratios: Vec<u16> = vec![6, 4];
-    let mut image_mode = RenderMode::Auto;
-    let mut gif_mode = RenderMode::Auto;
+    let mut image_mode = ImageMode::Native;
+    let mut gif_mode = ImageMode::Native;
     let mut markdown_path: Option<PathBuf> = None;
 
     let mut pending = args.peekable();
@@ -104,19 +102,6 @@ where
 
         if let Some(value) = arg.strip_prefix("--line-spacing=") {
             line_spacing = parse_line_spacing(value)?;
-            continue;
-        }
-
-        if arg == "--columns" {
-            let Some(value) = pending.next() else {
-                return Err(AppError::input("missing value for --columns"));
-            };
-            column_ratios = parse_columns(&value)?;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--columns=") {
-            column_ratios = parse_columns(value)?;
             continue;
         }
 
@@ -168,7 +153,6 @@ where
         fps,
         theme,
         line_spacing,
-        column_ratios,
         image_mode,
         gif_mode,
     })
@@ -194,32 +178,11 @@ fn parse_line_spacing(value: &str) -> Result<u8, AppError> {
     Ok(spacing)
 }
 
-fn parse_columns(value: &str) -> Result<Vec<u16>, AppError> {
-    let mut out = Vec::new();
-    for part in value.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let n = trimmed
-            .parse::<u16>()
-            .map_err(|_| AppError::input(format!("invalid columns ratio: {trimmed}")))?;
-        if n == 0 {
-            return Err(AppError::input("columns ratios must be > 0"));
-        }
-        out.push(n);
-    }
-    if out.is_empty() {
-        return Err(AppError::input("columns requires at least one ratio"));
-    }
-    Ok(out)
-}
-
-fn parse_render_mode(value: &str) -> Result<RenderMode, AppError> {
+fn parse_render_mode(value: &str) -> Result<ImageMode, AppError> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Ok(RenderMode::Auto),
-        "ascii" => Ok(RenderMode::Ascii),
-        "native" => Ok(RenderMode::Native),
+        "auto" => Ok(ImageMode::Auto),
+        "ascii" => Ok(ImageMode::Ascii),
+        "native" => Ok(ImageMode::Native),
         _ => Err(AppError::input(format!(
             "invalid render mode: {value} (expected auto|ascii|native)"
         ))),

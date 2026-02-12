@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::model::{
-    Block, CalloutData, CalloutKind, CodeData, HorizontalAlign, ImageAsset, ListData, Presentation,
-    Slide, TableData, VerticalAlign,
+    Block, CalloutData, CalloutKind, CodeData, ColumnAlign, CoverData, HorizontalAlign, ImageAsset,
+    ImageMode, ListData, Presentation, Slide, TableData, VerticalAlign,
 };
 
 pub fn parse_presentation(path: &Path) -> Result<Presentation, String> {
@@ -24,8 +24,24 @@ pub fn parse_presentation_from_str(
     }
 
     let mut slides = Vec::with_capacity(chunks.len());
-    for chunk in chunks {
-        slides.push(parse_slide_chunk(&chunk)?);
+    for (idx, chunk) in chunks.iter().enumerate() {
+        if idx == 0
+            && let Some((cover, image)) = parse_cover_chunk(&chunk.content)
+        {
+            slides.push(Slide {
+                blocks: Vec::new(),
+                title: chunk.config.title.clone(),
+                image,
+                warnings: Vec::new(),
+                reveal_fragments: false,
+                line_spacing: None,
+                column_ratios: chunk.config.column_ratios.clone(),
+                image_mode: chunk.config.image_mode,
+                cover: Some(cover),
+            });
+            continue;
+        }
+        slides.push(parse_slide_chunk(&chunk.content, &chunk.config)?);
     }
 
     if slides.is_empty() {
@@ -38,10 +54,24 @@ pub fn parse_presentation_from_str(
     })
 }
 
-pub fn split_slides(markdown: &str) -> Vec<String> {
+#[derive(Debug, Clone, Default)]
+pub struct SlideConfig {
+    pub column_ratios: Option<Vec<u16>>,
+    pub image_mode: Option<ImageMode>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SlideChunk {
+    pub content: String,
+    pub config: SlideConfig,
+}
+
+pub fn split_slides(markdown: &str) -> Vec<SlideChunk> {
     let mut slides = Vec::new();
     let mut current = String::new();
     let mut fence_char: Option<char> = None;
+    let mut current_config = SlideConfig::default();
 
     for line in markdown.lines() {
         let trimmed = line.trim();
@@ -58,11 +88,16 @@ pub fn split_slides(markdown: &str) -> Vec<String> {
             fence_char = None;
         }
 
-        if fence_char.is_none() && trimmed == "---" {
-            if !current.trim().is_empty() {
-                slides.push(current.trim_end().to_string());
+        if fence_char.is_none() && trimmed.starts_with("---") {
+            let next_config = parse_delimiter_config(trimmed).unwrap_or_default();
+            if !current.trim().is_empty() || should_emit_empty_slide(&current_config) {
+                slides.push(SlideChunk {
+                    content: current.trim_end().to_string(),
+                    config: current_config,
+                });
             }
             current.clear();
+            current_config = next_config;
             continue;
         }
 
@@ -70,14 +105,145 @@ pub fn split_slides(markdown: &str) -> Vec<String> {
         current.push('\n');
     }
 
-    if !current.trim().is_empty() {
-        slides.push(current.trim_end().to_string());
+    if !current.trim().is_empty() || should_emit_empty_slide(&current_config) {
+        slides.push(SlideChunk {
+            content: current.trim_end().to_string(),
+            config: current_config,
+        });
     }
 
     slides
 }
 
-fn parse_slide_chunk(chunk: &str) -> Result<Slide, String> {
+fn should_emit_empty_slide(config: &SlideConfig) -> bool {
+    config
+        .title
+        .as_ref()
+        .is_some_and(|title| !title.trim().is_empty())
+}
+
+fn parse_delimiter_config(trimmed: &str) -> Option<SlideConfig> {
+    if trimmed == "---" {
+        return Some(SlideConfig::default());
+    }
+    let cfg = trimmed.strip_prefix("---")?.trim();
+    let cfg = cfg.strip_prefix('{')?.strip_suffix('}')?;
+    let mut out = SlideConfig::default();
+
+    // Support: --- {columns: [1,3], image-mode: native}
+    let cfg_lc = cfg.to_ascii_lowercase();
+    if let Some(col_pos) = cfg_lc.find("columns:") {
+        let rest = &cfg[col_pos + "columns:".len()..];
+        if let Some(start) = rest.find('[')
+            && let Some(end) = rest[start + 1..].find(']')
+        {
+            let inner = &rest[start + 1..start + 1 + end];
+            let cols = inner
+                .split(',')
+                .filter_map(|v| v.trim().parse::<u16>().ok())
+                .filter(|v| *v > 0)
+                .collect::<Vec<_>>();
+            if !cols.is_empty() {
+                out.column_ratios = Some(cols);
+            }
+        }
+    }
+    if let Some(mode_pos) = cfg_lc.find("image-mode:") {
+        let rest = cfg[mode_pos + "image-mode:".len()..]
+            .split([',', '}'])
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !rest.is_empty() {
+            out.image_mode = parse_image_mode(rest);
+        }
+    }
+    if let Some(title) = parse_delimiter_string_value(cfg, "title") {
+        out.title = Some(title);
+    }
+
+    Some(out)
+}
+
+fn parse_delimiter_string_value(cfg: &str, key: &str) -> Option<String> {
+    let cfg_lc = cfg.to_ascii_lowercase();
+    let needle = format!("{key}:");
+    let start = cfg_lc.find(&needle)?;
+    let mut rest = cfg[start + needle.len()..].trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(after_quote) = rest.strip_prefix('"') {
+        let end = after_quote.find('"')?;
+        let value = after_quote[..end].trim();
+        return (!value.is_empty()).then(|| value.to_string());
+    }
+    let end = rest.find(',').unwrap_or(rest.len());
+    rest = rest[..end].trim();
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
+fn parse_image_mode(value: &str) -> Option<ImageMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ImageMode::Auto),
+        "ascii" => Some(ImageMode::Ascii),
+        "native" => Some(ImageMode::Native),
+        _ => None,
+    }
+}
+
+fn parse_cover_chunk(chunk: &str) -> Option<(CoverData, Option<ImageAsset>)> {
+    let mut title: Option<String> = None;
+    let mut subtitle: Option<String> = None;
+    let mut author: Option<String> = None;
+    let mut image_path: Option<PathBuf> = None;
+
+    for line in chunk.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (key, value) = trimmed.split_once(':')?;
+        let key = key.trim();
+        let value = value.trim();
+        let value = unquote_value(value);
+        match key {
+            "title" => title = Some(value),
+            "sub_title" => subtitle = Some(value),
+            "author" => author = Some(value),
+            "image" => image_path = Some(PathBuf::from(value)),
+            _ => return None,
+        }
+    }
+
+    let title = title?;
+    let cover = CoverData {
+        title,
+        subtitle,
+        author,
+    };
+    let image = image_path.map(|path| ImageAsset {
+        path,
+        alt: None,
+        valign: VerticalAlign::Middle,
+        halign: HorizontalAlign::Center,
+        frames: Vec::new(),
+        delays_ms: Vec::new(),
+        cached_for: None,
+        load_error: None,
+    });
+    Some((cover, image))
+}
+
+fn unquote_value(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        return trimmed[1..trimmed.len() - 1].trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn parse_slide_chunk(chunk: &str, config: &SlideConfig) -> Result<Slide, String> {
     let directives = parse_slide_directives(chunk);
     let sanitized_chunk = directives.sanitized;
 
@@ -190,11 +356,29 @@ fn parse_slide_chunk(chunk: &str) -> Result<Slide, String> {
                 TagEnd::Heading(level) => {
                     let trimmed = heading.trim().to_string();
                     if !trimmed.is_empty() {
-                        if level == HeadingLevel::H1 && !first_h1_seen {
-                            blocks.push(Block::BigText(trimmed));
-                            first_h1_seen = true;
-                        } else {
-                            blocks.push(Block::Paragraph(trimmed));
+                        match level {
+                            HeadingLevel::H1 if !first_h1_seen => {
+                                blocks.push(Block::BigText(trimmed));
+                                first_h1_seen = true;
+                            }
+                            HeadingLevel::H2
+                            | HeadingLevel::H3
+                            | HeadingLevel::H4
+                            | HeadingLevel::H5
+                            | HeadingLevel::H6 => {
+                                let heading_level = match level {
+                                    HeadingLevel::H2 => 1,
+                                    HeadingLevel::H3 => 2,
+                                    _ => 3,
+                                };
+                                blocks.push(Block::SectionHeading {
+                                    level: heading_level,
+                                    text: trimmed,
+                                });
+                            }
+                            _ => {
+                                blocks.push(Block::Paragraph(trimmed));
+                            }
                         }
                     }
                     heading.clear();
@@ -322,6 +506,20 @@ fn parse_slide_chunk(chunk: &str) -> Result<Slide, String> {
                     &mut pending_image_alt,
                 );
             }
+            Event::Html(html) => {
+                if let Some(column) = parse_column_directive(html.as_ref()) {
+                    flush_paragraph(&mut blocks, &mut paragraph, &mut in_paragraph);
+                    blocks.push(Block::ColumnBreak(column));
+                } else if let Some(align) = parse_align_directive(html.as_ref()) {
+                    flush_paragraph(&mut blocks, &mut paragraph, &mut in_paragraph);
+                    blocks.push(Block::ColumnAlign(align));
+                } else if let Some(spacing) = parse_inline_line_spacing(html.as_ref()) {
+                    flush_paragraph(&mut blocks, &mut paragraph, &mut in_paragraph);
+                    if spacing > 0 {
+                        blocks.push(Block::Spacer(spacing));
+                    }
+                }
+            }
             Event::SoftBreak | Event::HardBreak => {
                 if in_code_block {
                     code_body.push('\n');
@@ -345,10 +543,14 @@ fn parse_slide_chunk(chunk: &str) -> Result<Slide, String> {
 
     Ok(Slide {
         blocks,
+        title: config.title.clone(),
         image,
         warnings,
         reveal_fragments: directives.reveal_fragments,
         line_spacing: directives.line_spacing,
+        column_ratios: config.column_ratios.clone(),
+        image_mode: config.image_mode,
+        cover: None,
     })
 }
 
@@ -390,6 +592,39 @@ fn parse_slide_directives(chunk: &str) -> SlideDirectives {
         sanitized: out,
         reveal_fragments,
         line_spacing,
+    }
+}
+
+fn parse_inline_line_spacing(input: &str) -> Option<usize> {
+    let trimmed = input.trim().to_ascii_lowercase();
+    let value = trimmed
+        .strip_prefix("<!-- line-spacing:")
+        .or_else(|| trimmed.strip_prefix("<!-- line_spacing:"))?
+        .strip_suffix("-->")?
+        .trim();
+    value.parse::<usize>().ok().map(|v| v.min(24))
+}
+
+fn parse_column_directive(input: &str) -> Option<usize> {
+    let trimmed = input.trim().to_ascii_lowercase();
+    let value = trimmed
+        .strip_prefix("<!-- column:")
+        .and_then(|s| s.strip_suffix("-->"))?
+        .trim();
+    value.parse::<usize>().ok()
+}
+
+fn parse_align_directive(input: &str) -> Option<ColumnAlign> {
+    let trimmed = input.trim().to_ascii_lowercase();
+    let value = trimmed
+        .strip_prefix("<!-- align:")
+        .and_then(|s| s.strip_suffix("-->"))?
+        .trim();
+    match value {
+        "left" => Some(ColumnAlign::Left),
+        "center" => Some(ColumnAlign::Center),
+        "right" => Some(ColumnAlign::Right),
+        _ => None,
     }
 }
 
@@ -577,8 +812,8 @@ mod tests {
         let input = "# A\n---\n# B\n";
         let chunks = split_slides(input);
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0], "# A");
-        assert_eq!(chunks[1], "# B");
+        assert_eq!(chunks[0].content, "# A");
+        assert_eq!(chunks[1].content, "# B");
     }
 
     #[test]
@@ -586,7 +821,17 @@ mod tests {
         let input = "```\n---\n```\n---\n# Slide\n";
         let chunks = split_slides(input);
         assert_eq!(chunks.len(), 2);
-        assert!(chunks[0].contains("---"));
+        assert!(chunks[0].content.contains("---"));
+    }
+
+    #[test]
+    fn emits_empty_slide_when_delimiter_has_title_config() {
+        let input = "--- {title: \"Only Title\"}\n---\n# Next\n";
+        let chunks = split_slides(input);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].content, "");
+        assert_eq!(chunks[0].config.title.as_deref(), Some("Only Title"));
+        assert_eq!(chunks[1].content, "# Next");
     }
 
     #[test]
@@ -629,5 +874,96 @@ mod tests {
         assert!(slide.blocks.iter().any(|b| matches!(b, Block::Callout(_))));
         assert!(slide.blocks.iter().any(|b| matches!(b, Block::Quote(_))));
         assert!(slide.blocks.iter().any(|b| matches!(b, Block::List(_))));
+    }
+
+    #[test]
+    fn parses_cover_first_slide() {
+        let md = "title: Demo\nsub_title: Hello\nauthor: Me\nimage: assets/demo.png\n---\n# Next\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let first = &presentation.slides[0];
+        assert!(first.cover.is_some());
+        assert!(first.image.is_some());
+    }
+
+    #[test]
+    fn parses_quoted_cover_values() {
+        let md = "title: \"The future is LOVABLE.\"\nsub_title: \"This is super cool\"\nauthor: \"Me\"\nimage: \"./assets/lovable.svg\"\n---\n# Next\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let slide = &presentation.slides[0];
+        let first = slide.cover.as_ref().expect("cover exists");
+        assert_eq!(first.title, "The future is LOVABLE.");
+        assert_eq!(first.subtitle.as_deref(), Some("This is super cool"));
+        assert_eq!(first.author.as_deref(), Some("Me"));
+        assert_eq!(
+            slide.image.as_ref().map(|img| img.path.clone()),
+            Some(PathBuf::from("./assets/lovable.svg"))
+        );
+    }
+
+    #[test]
+    fn leading_delimiter_config_applies_to_cover_slide() {
+        let md = "--- {columns: [1,3], image-mode: native}\ntitle: Demo\nsub_title: Hello\nauthor: Me\n---\n# Next\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let first = &presentation.slides[0];
+        assert!(first.cover.is_some());
+        assert_eq!(first.column_ratios, Some(vec![1, 3]));
+        assert_eq!(first.image_mode, Some(ImageMode::Native));
+    }
+
+    #[test]
+    fn delimiter_config_applies_to_next_slide() {
+        let md = "# One\n--- {columns: [1,3], image-mode: native, title: \"Slide Title\"}\n# Two\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        assert_eq!(presentation.slides.len(), 2);
+        assert!(presentation.slides[0].column_ratios.is_none());
+        assert_eq!(presentation.slides[1].column_ratios, Some(vec![1, 3]));
+        assert_eq!(presentation.slides[1].image_mode, Some(ImageMode::Native));
+        assert_eq!(presentation.slides[1].title.as_deref(), Some("Slide Title"));
+    }
+
+    #[test]
+    fn inline_line_spacing_inserts_spacer_block() {
+        let md = "# A\n\nBefore\n\n<!-- line-spacing: 10 -->\n\nAfter\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let slide = &presentation.slides[0];
+        assert!(slide.blocks.iter().any(|b| matches!(b, Block::Spacer(10))));
+    }
+
+    #[test]
+    fn parses_column_and_align_directives() {
+        let md = "# A\n<!-- column: 1 -->\ntext\n<!-- align: center -->\nmore\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let slide = &presentation.slides[0];
+        assert!(
+            slide
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::ColumnBreak(1)))
+        );
+        assert!(
+            slide
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::ColumnAlign(ColumnAlign::Center)))
+        );
+    }
+
+    #[test]
+    fn maps_h2_h3_to_section_heading_blocks() {
+        let md = "## One\nBody\n### Two\nBody\n";
+        let presentation = parse_presentation_from_str(md, Path::new("deck.md")).expect("parse ok");
+        let slide = &presentation.slides[0];
+        assert!(
+            slide
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::SectionHeading { level: 1, .. }))
+        );
+        assert!(
+            slide
+                .blocks
+                .iter()
+                .any(|b| matches!(b, Block::SectionHeading { level: 2, .. }))
+        );
     }
 }

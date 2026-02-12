@@ -1,6 +1,11 @@
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Mutex, OnceLock},
+};
 use std::{env, fs};
 
 use crossterm::cursor;
@@ -8,8 +13,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use image::image_dimensions;
+use resvg::{self, tiny_skia, usvg};
 
-use crate::model::{HorizontalAlign, Presentation, VerticalAlign};
+use crate::model::{HorizontalAlign, ImageMode, Presentation, VerticalAlign};
 use crate::render::code::CodeHighlighter;
 use crate::render::{RenderParams, Theme, compute_native_image_rect, render_slide};
 
@@ -19,16 +25,8 @@ pub struct AppConfig {
     pub fps: u16,
     pub theme: Theme,
     pub line_spacing: u8,
-    pub column_ratios: Vec<u16>,
-    pub image_mode: RenderMode,
-    pub gif_mode: RenderMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderMode {
-    Auto,
-    Ascii,
-    Native,
+    pub image_mode: ImageMode,
+    pub gif_mode: ImageMode,
 }
 
 #[derive(Debug)]
@@ -228,17 +226,28 @@ fn run_tui_mode(presentation: &mut Presentation, config: AppConfig) -> Result<()
             .get(state.current_slide)
             .and_then(|slide| slide.image.as_ref())
             .map(|image| image.path.clone());
+        let current_columns = presentation
+            .slides
+            .get(state.current_slide)
+            .and_then(|slide| slide.column_ratios.clone())
+            .unwrap_or_else(|| vec![6, 4]);
+        let slide_image_mode = presentation
+            .slides
+            .get(state.current_slide)
+            .and_then(|slide| slide.image_mode);
         let slide_has_image = current_image_path.is_some();
         let media_kind = current_image_path
             .as_ref()
             .map(|path| media_kind_for_path(path))
             .unwrap_or(MediaKind::StaticImage);
+        let effective_image_mode = slide_image_mode.unwrap_or(config.image_mode);
+        let effective_gif_mode = slide_image_mode.unwrap_or(config.gif_mode);
         let prefer_real_images = slide_has_image
             && image_backend.is_native()
             && match media_kind {
-                MediaKind::StaticImage => should_use_native(config.image_mode),
-                MediaKind::Gif => should_use_native(config.gif_mode),
-                MediaKind::Svg => false,
+                MediaKind::StaticImage => should_use_native(effective_image_mode),
+                MediaKind::Gif => should_use_native(effective_gif_mode),
+                MediaKind::Svg => should_use_native(effective_image_mode),
                 MediaKind::Video => false,
             };
         let animated_ascii = !prefer_real_images
@@ -276,7 +285,7 @@ fn run_tui_mode(presentation: &mut Presentation, config: AppConfig) -> Result<()
                     visible_blocks,
                     theme: &config.theme,
                     line_spacing: config.line_spacing,
-                    column_ratios: &config.column_ratios,
+                    column_ratios: &current_columns,
                 })
             };
 
@@ -315,24 +324,38 @@ fn run_tui_mode(presentation: &mut Presentation, config: AppConfig) -> Result<()
                                 slide,
                                 geometry.width,
                                 geometry.height,
-                                &config.column_ratios,
+                                &current_columns,
                             ) {
                                 let image_path = resolve_image_path(source_dir, &image.path);
+                                let native_path = if media_kind == MediaKind::Svg {
+                                    prepare_native_svg_png(
+                                        &image_path,
+                                        rect.width.max(1),
+                                        rect.height.max(1),
+                                    )
+                                    .unwrap_or_else(|| image_path.clone())
+                                } else {
+                                    image_path.clone()
+                                };
                                 let (fit_x, fit_y, fit_w, fit_h) = fit_native_rect(
-                                    &image_path,
+                                    &native_path,
                                     rect.x,
                                     rect.y,
                                     rect.width,
                                     rect.height,
                                     image.halign,
-                                    image.valign,
+                                    if slide.title.is_none() && slide.blocks.is_empty() {
+                                        VerticalAlign::Middle
+                                    } else {
+                                        image.valign
+                                    },
                                 );
                                 let abs_x = geometry.origin_x + fit_x;
                                 let abs_y = geometry.origin_y + fit_y;
                                 draw_native_image(
                                     &mut stdout,
                                     &image_backend,
-                                    &image_path,
+                                    &native_path,
                                     abs_x,
                                     abs_y,
                                     fit_w,
@@ -456,10 +479,6 @@ fn draw_native_image(
     width: u16,
     height: u16,
 ) {
-    let Ok(bytes) = fs::read(path) else {
-        return;
-    };
-
     match backend {
         ImageBackend::KittyGraphics => {
             let encoded_path = base64_encode(path.to_string_lossy().as_bytes());
@@ -476,7 +495,9 @@ fn draw_native_image(
             let _ = handle.flush();
         }
         ImageBackend::ItermInline => {
-            let encoded_bytes = base64_encode(&bytes);
+            let Some(encoded_bytes) = encoded_image_bytes(path) else {
+                return;
+            };
             let mut handle = stdout.lock();
             let _ = write!(
                 handle,
@@ -491,6 +512,26 @@ fn draw_native_image(
         }
         ImageBackend::Ascii => {}
     }
+}
+
+fn encoded_image_bytes(path: &Path) -> Option<String> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(guard) = cache.lock() {
+        if let Some(value) = guard.get(path) {
+            return Some(value.clone());
+        }
+    }
+
+    let bytes = fs::read(path).ok()?;
+    let encoded = base64_encode(&bytes);
+
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(path.to_path_buf(), encoded.clone());
+    }
+
+    Some(encoded)
 }
 
 fn fit_native_rect(
@@ -570,8 +611,59 @@ fn media_kind_for_path(path: &Path) -> MediaKind {
     }
 }
 
-fn should_use_native(mode: RenderMode) -> bool {
-    matches!(mode, RenderMode::Native | RenderMode::Auto)
+fn should_use_native(mode: ImageMode) -> bool {
+    matches!(mode, ImageMode::Native | ImageMode::Auto)
+}
+
+fn prepare_native_svg_png(
+    path: &Path,
+    target_cols: u16,
+    target_rows: u16,
+) -> Option<std::path::PathBuf> {
+    let data = fs::read(path).ok()?;
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_data(&data, &options).ok()?;
+    let size = tree.size();
+    let intrinsic_w = size.width().round().max(1.0) as u32;
+    let intrinsic_h = size.height().round().max(1.0) as u32;
+
+    // Render SVG at a higher resolution than terminal-cell size to keep edges sharp
+    // when the terminal backend scales it into cell bounds.
+    let target_w = u32::from(target_cols).saturating_mul(16);
+    let target_h = u32::from(target_rows).saturating_mul(32);
+    let width = intrinsic_w.max(target_w).clamp(1, 8192);
+    let height = intrinsic_h.max(target_h).clamp(1, 8192);
+
+    let mut key = path.to_string_lossy().to_string();
+    key.push(':');
+    key.push_str(&format!("{width}x{height}"));
+    let hash = fnv1a_hash64(key.as_bytes());
+    let out = env::temp_dir().join(format!("rslides-svg-{hash:016x}.png"));
+    if out.exists() {
+        return Some(out);
+    }
+
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
+    let sx = width as f32 / size.width();
+    let sy = height as f32 / size.height();
+    let scale = sx.min(sy);
+    let draw_w = size.width() * scale;
+    let draw_h = size.height() * scale;
+    let tx = (width as f32 - draw_w) * 0.5;
+    let ty = (height as f32 - draw_h) * 0.5;
+    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(tx, ty);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    pixmap.save_png(&out).ok()?;
+    Some(out)
+}
+
+fn fnv1a_hash64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn clear_native_images(stdout: &mut io::Stdout, backend: &ImageBackend) {
@@ -637,6 +729,11 @@ fn run_plain_mode(presentation: &mut Presentation, config: AppConfig) -> Result<
     let stdin = io::stdin();
     loop {
         let visible_blocks = state.visible_blocks_for_current(presentation);
+        let current_columns = presentation
+            .slides
+            .get(state.current_slide)
+            .and_then(|slide| slide.column_ratios.clone())
+            .unwrap_or_else(|| vec![6, 4]);
         let rendered = {
             let slide = &mut presentation.slides[state.current_slide];
             render_slide(RenderParams {
@@ -654,7 +751,7 @@ fn run_plain_mode(presentation: &mut Presentation, config: AppConfig) -> Result<
                 visible_blocks,
                 theme: &config.theme,
                 line_spacing: config.line_spacing,
-                column_ratios: &config.column_ratios,
+                column_ratios: &current_columns,
             })
         };
 
@@ -699,12 +796,17 @@ fn write_ansi_frame(
     origin_x: u16,
     origin_y: u16,
 ) -> io::Result<()> {
-    let total_rows = previous_lines.len().max(lines.len());
+    let full_redraw = previous_lines.is_empty();
+    let total_rows = if full_redraw {
+        lines.len()
+    } else {
+        previous_lines.len().max(lines.len())
+    };
     let mut handle = stdout.lock();
     for row in 0..total_rows {
         let next = lines.get(row).map(String::as_str).unwrap_or("");
         let prev = previous_lines.get(row).map(String::as_str).unwrap_or("");
-        if next != prev {
+        if full_redraw || next != prev {
             write!(
                 handle,
                 "\x1b[{};{}H\x1b[2K{next}",
@@ -823,24 +925,36 @@ mod tests {
             slides: vec![
                 Slide {
                     blocks: vec![],
+                    title: None,
                     image: None,
                     warnings: vec![],
                     reveal_fragments: false,
                     line_spacing: None,
+                    column_ratios: None,
+                    image_mode: None,
+                    cover: None,
                 },
                 Slide {
                     blocks: vec![],
+                    title: None,
                     image: None,
                     warnings: vec![],
                     reveal_fragments: false,
                     line_spacing: None,
+                    column_ratios: None,
+                    image_mode: None,
+                    cover: None,
                 },
                 Slide {
                     blocks: vec![],
+                    title: None,
                     image: None,
                     warnings: vec![],
                     reveal_fragments: false,
                     line_spacing: None,
+                    column_ratios: None,
+                    image_mode: None,
+                    cover: None,
                 },
             ],
             source_path: std::path::PathBuf::new(),
