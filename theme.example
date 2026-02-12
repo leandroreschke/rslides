@@ -1,0 +1,14 @@
+# RGB values as r,g,b
+# ultraviolet -> cyan title gradient
+title_start=178,102,255
+title_end=102,245,255
+text=220,225,232
+quote=185,195,210
+table=156,204,168
+code_bg=34,38,54
+callout_note_bg=37,64,104
+callout_tip_bg=30,85,73
+callout_warn_bg=96,57,36
+footer_muted=170,177,191
+footer_accent=244,208,120
+footer_warn=255,170,170
