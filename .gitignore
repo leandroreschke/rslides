@@ -1,1 +1,10 @@
 /target
+
+# Keep demo deck tracked for users cloning the repo.
+!demo.md
+
+# OS/editor noise
+.DS_Store
+*.swp
+*.swo
+*~

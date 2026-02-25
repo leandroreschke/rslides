@@ -2,19 +2,13 @@ use std::env;
 use std::path::PathBuf;
 
 use rslides::app::{AppConfig, run_presentation};
-use rslides::model::ImageMode;
 use rslides::parser::parse_presentation;
 use rslides::render::Theme;
 
 #[derive(Debug)]
 struct Cli {
     markdown_path: PathBuf,
-    no_ansi: bool,
-    fps: u16,
     theme: Theme,
-    line_spacing: u8,
-    image_mode: ImageMode,
-    gif_mode: ImageMode,
 }
 
 fn main() {
@@ -36,12 +30,12 @@ fn run() -> Result<(), AppError> {
     run_presentation(
         presentation,
         AppConfig {
-            no_ansi: cli.no_ansi,
-            fps: cli.fps,
+            no_ansi: false,
+            fps: 8,
             theme: cli.theme,
-            line_spacing: cli.line_spacing,
-            image_mode: cli.image_mode,
-            gif_mode: cli.gif_mode,
+            line_spacing: 1,
+            image_mode: rslides::model::ImageMode::Native,
+            gif_mode: rslides::model::ImageMode::Native,
         },
     )
     .map_err(AppError::runtime)
@@ -51,34 +45,11 @@ fn parse_args<I>(args: I) -> Result<Cli, AppError>
 where
     I: Iterator<Item = String>,
 {
-    let mut no_ansi = false;
-    let mut fps = 8u16;
     let mut theme = Theme::default();
-    let mut line_spacing = 1u8;
-    let mut image_mode = ImageMode::Native;
-    let mut gif_mode = ImageMode::Native;
     let mut markdown_path: Option<PathBuf> = None;
 
     let mut pending = args.peekable();
     while let Some(arg) = pending.next() {
-        if arg == "--no-ansi" {
-            no_ansi = true;
-            continue;
-        }
-
-        if arg == "--fps" {
-            let Some(value) = pending.next() else {
-                return Err(AppError::input("missing value for --fps"));
-            };
-            fps = parse_fps(&value)?;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--fps=") {
-            fps = parse_fps(value)?;
-            continue;
-        }
-
         if arg == "--theme" {
             let Some(value) = pending.next() else {
                 return Err(AppError::input("missing value for --theme"));
@@ -89,45 +60,6 @@ where
 
         if let Some(value) = arg.strip_prefix("--theme=") {
             theme = Theme::from_file(&PathBuf::from(value)).map_err(AppError::input)?;
-            continue;
-        }
-
-        if arg == "--line-spacing" {
-            let Some(value) = pending.next() else {
-                return Err(AppError::input("missing value for --line-spacing"));
-            };
-            line_spacing = parse_line_spacing(&value)?;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--line-spacing=") {
-            line_spacing = parse_line_spacing(value)?;
-            continue;
-        }
-
-        if arg == "--image-mode" {
-            let Some(value) = pending.next() else {
-                return Err(AppError::input("missing value for --image-mode"));
-            };
-            image_mode = parse_render_mode(&value)?;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--image-mode=") {
-            image_mode = parse_render_mode(value)?;
-            continue;
-        }
-
-        if arg == "--gif-mode" {
-            let Some(value) = pending.next() else {
-                return Err(AppError::input("missing value for --gif-mode"));
-            };
-            gif_mode = parse_render_mode(&value)?;
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--gif-mode=") {
-            gif_mode = parse_render_mode(value)?;
             continue;
         }
 
@@ -143,50 +75,14 @@ where
 
     let Some(markdown_path) = markdown_path else {
         return Err(AppError::input(
-            "usage: rslides [--no-ansi] [--fps <n>] [--image-mode auto|ascii|native] [--gif-mode auto|ascii|native] <file.md>",
+            "usage: rslides [--theme <file>] <file.md>",
         ));
     };
 
     Ok(Cli {
         markdown_path,
-        no_ansi,
-        fps,
         theme,
-        line_spacing,
-        image_mode,
-        gif_mode,
     })
-}
-
-fn parse_fps(value: &str) -> Result<u16, AppError> {
-    let fps = value
-        .parse::<u16>()
-        .map_err(|_| AppError::input(format!("invalid fps value: {value}")))?;
-    if fps == 0 {
-        return Err(AppError::input("fps must be greater than zero"));
-    }
-    Ok(fps)
-}
-
-fn parse_line_spacing(value: &str) -> Result<u8, AppError> {
-    let spacing = value
-        .parse::<u8>()
-        .map_err(|_| AppError::input(format!("invalid line spacing: {value}")))?;
-    if spacing == 0 || spacing > 6 {
-        return Err(AppError::input("line spacing must be between 1 and 6"));
-    }
-    Ok(spacing)
-}
-
-fn parse_render_mode(value: &str) -> Result<ImageMode, AppError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Ok(ImageMode::Auto),
-        "ascii" => Ok(ImageMode::Ascii),
-        "native" => Ok(ImageMode::Native),
-        _ => Err(AppError::input(format!(
-            "invalid render mode: {value} (expected auto|ascii|native)"
-        ))),
-    }
 }
 
 #[derive(Debug)]

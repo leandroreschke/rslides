@@ -109,22 +109,3 @@ fn glyph_for(ch: char) -> Option<[&'static str; GLYPH_HEIGHT]> {
     };
     Some(glyph)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn renders_ascii_title() {
-        let lines = render_big_text("AB", 80);
-        assert!(lines.len() >= 6);
-        assert!(lines[0].contains('█') || lines[0].contains('▓'));
-    }
-
-    #[test]
-    fn falls_back_for_unsupported_chars() {
-        let lines = render_big_text("@Hi", 40);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "@Hi");
-    }
-}

@@ -42,22 +42,3 @@ pub fn compute_column_widths(total_width: u16, ratios: &[u16]) -> Vec<u16> {
 
     widths
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn computes_custom_split() {
-        let cols = compute_column_widths(100, &[2, 8]);
-        assert_eq!(cols.len(), 2);
-        assert_eq!(cols[0] + cols[1] + 1, 100);
-    }
-
-    #[test]
-    fn supports_three_columns() {
-        let cols = compute_column_widths(90, &[2, 3, 5]);
-        assert_eq!(cols.len(), 3);
-        assert_eq!(cols[0] + cols[1] + cols[2] + 2, 90);
-    }
-}

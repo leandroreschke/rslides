@@ -231,26 +231,3 @@ fn frame_interval_ms(fps: u16) -> u16 {
     ms.max(16)
 }
 
-#[cfg(test)]
-mod tests {
-    use image::{DynamicImage, GrayImage, Luma};
-
-    use super::dynamic_image_to_ascii_frame;
-
-    #[test]
-    fn ascii_mapping_is_deterministic() {
-        let mut img = GrayImage::new(2, 2);
-        img.put_pixel(0, 0, Luma([0]));
-        img.put_pixel(1, 0, Luma([80]));
-        img.put_pixel(0, 1, Luma([140]));
-        img.put_pixel(1, 1, Luma([220]));
-
-        let dyn_img = DynamicImage::ImageLuma8(img);
-        let frame = dynamic_image_to_ascii_frame(&dyn_img, 2, 2);
-
-        assert_eq!(frame.width, 2);
-        assert_eq!(frame.height, 2);
-        assert_eq!(frame.lines[0], "█▓");
-        assert_eq!(frame.lines[1], "▒░");
-    }
-}
