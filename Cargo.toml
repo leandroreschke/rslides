@@ -2,6 +2,11 @@
 name = "rslides"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal-native Markdown slide decks with code highlighting and image support."
+license-file = "LICENSE"
+readme = "README.md"
+keywords = ["slides", "terminal", "markdown", "presentation", "cli"]
+categories = ["command-line-utilities", "text-processing", "multimedia"]
 
 [dependencies]
 crossterm = "0.29"

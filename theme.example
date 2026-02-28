@@ -12,3 +12,6 @@ callout_warn_bg=96,57,36
 footer_muted=170,177,191
 footer_accent=244,208,120
 footer_warn=255,170,170
+cover_subtitle=255,170,142
+cover_author=255,210,158
+image_caption=255,195,120
